@@ -1,0 +1,735 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no"/>
+  <title>Live Mel Spectrogram + YAMNet</title>
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.17.0/dist/tf.min.js"></script>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      background: #0a0a0f;
+      color: #e0e0e0;
+      font-family: 'Courier New', monospace;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      height: 100dvh;
+      overflow: hidden;
+      touch-action: manipulation;
+    }
+
+    header {
+      padding: 10px 14px;
+      width: 100%;
+      display: flex;
+      flex-direction: column;
+      gap: 7px;
+      background: #10101a;
+      border-bottom: 1px solid #222;
+      flex-shrink: 0;
+    }
+
+    .header-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    header h1 {
+      font-size: 1rem;
+      letter-spacing: 0.12em;
+      color: #7ecfff;
+      text-transform: uppercase;
+    }
+
+    #controls {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+
+    button {
+      padding: 12px 24px;
+      border-radius: 8px;
+      border: 1px solid #7ecfff55;
+      background: #1a1a2e;
+      color: #7ecfff;
+      font-family: inherit;
+      font-size: 0.95rem;
+      cursor: pointer;
+      -webkit-tap-highlight-color: transparent;
+      transition: background 0.15s, border-color 0.15s;
+      min-width: 90px;
+    }
+    button:active  { background: #252545; border-color: #7ecfffaa; }
+    button:disabled { opacity: 0.35; }
+
+    label {
+      font-size: 0.75rem;
+      color: #aaa;
+      display: flex;
+      align-items: center;
+      gap: 5px;
+    }
+
+    select {
+      background: #1a1a2e;
+      color: #7ecfff;
+      border: 1px solid #7ecfff55;
+      border-radius: 5px;
+      padding: 5px 7px;
+      font-family: inherit;
+      font-size: 0.75rem;
+    }
+
+    input[type=range] {
+      -webkit-appearance: none;
+      appearance: none;
+      width: 80px;
+      height: 4px;
+      border-radius: 2px;
+      background: #2a2a4a;
+      outline: none;
+      cursor: pointer;
+    }
+    input[type=range]::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      width: 14px; height: 14px;
+      border-radius: 50%;
+      background: #7ecfff;
+      cursor: pointer;
+    }
+
+    .range-val { font-size: 0.7rem; color: #7ecfff; min-width: 36px; }
+
+    #status { font-size: 0.72rem; color: #888; text-align: center; }
+    #status.live  { color: #4dff91; }
+    #status.error { color: #ff6b6b; }
+
+    #canvas-wrap {
+      position: relative;
+      flex: 1;
+      width: 100%;
+      overflow: hidden;
+      min-height: 0;
+    }
+
+    canvas { display: block; width: 100%; height: 100%; }
+
+    #freq-axis {
+      position: absolute;
+      top: 0; right: 0;
+      height: 100%;
+      width: 58px;
+      pointer-events: none;
+    }
+
+    .freq-label {
+      position: absolute;
+      right: 6px;
+      font-size: 0.62rem;
+      color: #666;
+      text-align: right;
+      transform: translateY(-50%);
+    }
+
+    #legend {
+      position: absolute;
+      bottom: 12px;
+      left: 12px;
+      display: flex;
+      align-items: center;
+      gap: 7px;
+    }
+
+    #legend-bar {
+      width: 100px;
+      height: 9px;
+      border-radius: 4px;
+      border: 1px solid #333;
+    }
+
+    .legend-text { font-size: 0.62rem; color: #555; }
+
+    #info-label {
+      position: absolute;
+      top: 8px;
+      left: 8px;
+      font-size: 0.65rem;
+      color: #444;
+      letter-spacing: 0.08em;
+    }
+
+    /* ── Classifier Panel ──────────────────────────────────────── */
+    #classifier-panel {
+      width: 100%;
+      background: #0d0d1a;
+      border-top: 1px solid #1e1e3a;
+      padding: 8px 14px 10px;
+      flex-shrink: 0;
+    }
+
+    .clf-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 6px;
+    }
+
+    .clf-title {
+      font-size: 0.7rem;
+      color: #7ecfff;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+    }
+
+    #model-status { font-size: 0.65rem; color: #888; }
+    #model-status.ready   { color: #4dff91; }
+    #model-status.error   { color: #ff6b6b; }
+    #model-status.loading { color: #ffbb44; }
+
+    #predictions { display: flex; flex-direction: column; gap: 4px; }
+
+    .pred-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .pred-rank {
+      font-size: 0.6rem; color: #555;
+      width: 14px; text-align: right; flex-shrink: 0;
+    }
+
+    .pred-label {
+      font-size: 0.68rem; color: #ccc;
+      width: 145px;
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+      flex-shrink: 0;
+    }
+
+    .pred-bar-bg {
+      flex: 1; height: 8px;
+      background: #1a1a2e; border-radius: 4px; overflow: hidden;
+    }
+
+    .pred-bar { height: 100%; border-radius: 4px; transition: width 0.4s ease; }
+    .pred-bar.rank-0 { background: linear-gradient(90deg, #7ecfff, #4dff91); }
+    .pred-bar.rank-1 { background: linear-gradient(90deg, #5599cc, #33cc77); }
+    .pred-bar.rank-2 { background: linear-gradient(90deg, #3a6699, #2a9955); }
+    .pred-bar.rank-3 { background: linear-gradient(90deg, #2a4466, #1a6633); }
+    .pred-bar.rank-4 { background: linear-gradient(90deg, #1a2a44, #0a3322); }
+
+    .pred-score {
+      font-size: 0.65rem; color: #7ecfff;
+      width: 38px; text-align: right; flex-shrink: 0;
+    }
+  </style>
+</head>
+<body>
+
+<header>
+  <div class="header-row">
+    <h1>🎙 Mel Spectrogram</h1>
+    <div id="controls">
+      <label>Window
+        <select id="windowType">
+          <option value="hann" selected>Hann</option>
+          <option value="hamming">Hamming</option>
+          <option value="blackman">Blackman</option>
+          <option value="blackman-harris">Blk-Harris</option>
+          <option value="rect">Rectangular</option>
+        </select>
+      </label>
+      <label>Speed
+        <select id="speed">
+          <option value="1">1×</option>
+          <option value="2" selected>2×</option>
+          <option value="4">4×</option>
+        </select>
+      </label>
+      <button id="startBtn">▶ Start</button>
+      <button id="stopBtn" disabled>■ Stop</button>
+    </div>
+  </div>
+
+  <div class="header-row">
+    <label>Colormap
+      <select id="colormap">
+        <option value="turbo" selected>Turbo</option>
+        <option value="inferno">Inferno</option>
+        <option value="viridis">Viridis</option>
+        <option value="plasma">Plasma</option>
+        <option value="classic">Classic</option>
+        <option value="green">Green (Night)</option>
+      </select>
+    </label>
+    <label>Floor
+      <input type="range" id="dbFloor" min="-120" max="-20" step="1" value="-80"/>
+      <span class="range-val" id="dbFloorVal">-80 dB</span>
+    </label>
+    <label>Ceiling
+      <input type="range" id="dbCeil" min="-60" max="20" step="1" value="0"/>
+      <span class="range-val" id="dbCeilVal">0 dB</span>
+    </label>
+  </div>
+
+  <span id="status">Tap Start and allow microphone access</span>
+</header>
+
+<div id="canvas-wrap">
+  <canvas id="spectrogram"></canvas>
+  <div id="freq-axis"></div>
+  <div id="info-label">MEL SCALE · 64 BINS</div>
+  <div id="legend">
+    <span class="legend-text" id="legendMin">-80 dB</span>
+    <canvas id="legend-bar" width="100" height="9"></canvas>
+    <span class="legend-text" id="legendMax">0 dB</span>
+  </div>
+</div>
+
+<!-- ── Classifier panel ─────────────────────────────────────────── -->
+<div id="classifier-panel">
+  <div class="clf-header">
+    <span class="clf-title">🧠 YAMNet Audio Classifier</span>
+    <span id="model-status" class="loading">Loading model…</span>
+  </div>
+  <div id="predictions">
+    <div class="pred-row" style="color:#555;font-size:0.65rem;">Start mic to classify audio…</div>
+  </div>
+</div>
+
+<script>
+  // ── DOM refs ───────────────────────────────────────────────────
+  const canvas      = document.getElementById('spectrogram');
+  const ctx         = canvas.getContext('2d');
+  const startBtn    = document.getElementById('startBtn');
+  const stopBtn     = document.getElementById('stopBtn');
+  const statusEl    = document.getElementById('status');
+  const speedSel    = document.getElementById('speed');
+  const windowSel   = document.getElementById('windowType');
+  const cmapSel     = document.getElementById('colormap');
+  const dbFloorEl   = document.getElementById('dbFloor');
+  const dbCeilEl    = document.getElementById('dbCeil');
+  const dbFloorVal  = document.getElementById('dbFloorVal');
+  const dbCeilVal   = document.getElementById('dbCeilVal');
+  const legendMin   = document.getElementById('legendMin');
+  const legendMax   = document.getElementById('legendMax');
+  const legendBar   = document.getElementById('legend-bar');
+  const legendCtx   = legendBar.getContext('2d');
+  const freqAxis    = document.getElementById('freq-axis');
+  const modelStatus = document.getElementById('model-status');
+  const predsEl     = document.getElementById('predictions');
+
+  // ── Constants ──────────────────────────────────────────────────
+  const NUM_MEL_BINS = 64;
+  const FFT_SIZE     = 2048;
+  const F_MIN        = 80;
+  const F_MAX        = 8000;
+
+  // ── State ──────────────────────────────────────────────────────
+  let audioCtx, analyser, source, stream, animId, processor, silentGain;
+  let scrollCanvas, scrollCtx;
+  let melFilterbank = null;
+  let windowCoeffs  = null;
+  let timeDomainData, realBuf, imagBuf;
+  let dbFloor = -80;
+  let dbCeil  = 0;
+
+  // ── YAMNet state ───────────────────────────────────────────────
+  let yamnetModel   = null;
+  let classNames    = [];
+  let rawSampleBuf  = [];
+  let lastInferTime = 0;
+  let inferRunning  = false;
+  const INFER_INTERVAL = 1000;  // ms between inferences
+  const TARGET_SR      = 16000;
+  const YAMNET_LEN     = 15600; // 0.975 s at 16 kHz
+
+  // ── Colormaps ──────────────────────────────────────────────────
+  const COLORMAPS = {
+    turbo:   [[48,18,59],[70,40,150],[31,138,229],[15,200,169],[57,228,86],[196,231,34],[246,154,13],[214,67,7],[122,4,3]],
+    inferno: [[0,0,4],[40,11,84],[101,21,110],[159,42,99],[212,72,66],[245,125,21],[250,193,39],[252,255,164]],
+    viridis: [[68,1,84],[72,40,120],[62,83,160],[49,125,178],[38,166,176],[53,196,136],[122,209,81],[196,222,33],[253,231,37]],
+    plasma:  [[13,8,135],[84,2,163],[139,10,165],[185,50,137],[219,92,104],[244,136,73],[254,188,43],[240,249,33]],
+    classic: [[0,0,16],[0,20,80],[0,80,200],[0,200,200],[80,220,80],[200,220,0],[255,140,0],[255,20,0]],
+    green:   [[0,0,0],[0,20,0],[0,60,0],[0,120,10],[0,200,30],[60,255,80],[180,255,160],[220,255,210]]
+  };
+
+  function colormapColor(t, name) {
+    const stops  = COLORMAPS[name] || COLORMAPS.turbo;
+    const scaled = Math.max(0, Math.min(0.9999, t)) * (stops.length - 1);
+    const i = Math.floor(scaled), f = scaled - i;
+    const a = stops[i], b = stops[i + 1];
+    return [
+      Math.round(a[0] + f * (b[0] - a[0])),
+      Math.round(a[1] + f * (b[1] - a[1])),
+      Math.round(a[2] + f * (b[2] - a[2]))
+    ];
+  }
+
+  // ── Mel helpers ────────────────────────────────────────────────
+  const hzToMel = f => 2595 * Math.log10(1 + f / 700);
+  const melToHz = m => 700 * (Math.pow(10, m / 2595) - 1);
+
+  function buildMelFilterbank(fftSize, sampleRate, numBins, fMin, fMax) {
+    const numFftBins = fftSize / 2 + 1;
+    const melMin = hzToMel(fMin), melMax = hzToMel(fMax);
+    const melPts = Array.from({length: numBins + 2}, (_, i) =>
+      melMin + i * (melMax - melMin) / (numBins + 1));
+    const hzPts  = melPts.map(melToHz);
+    const fftFreqs = Array.from({length: numFftBins}, (_, i) => i * sampleRate / fftSize);
+
+    return Array.from({length: numBins}, (_, m) => {
+      const filter = new Float32Array(numFftBins);
+      const lo = hzPts[m], center = hzPts[m + 1], hi = hzPts[m + 2];
+      for (let k = 0; k < numFftBins; k++) {
+        const f = fftFreqs[k];
+        if (f >= lo && f <= center) filter[k] = (f - lo) / (center - lo);
+        else if (f > center && f <= hi) filter[k] = (hi - f) / (hi - center);
+      }
+      return filter;
+    });
+  }
+
+  function buildWindow(size, type) {
+    return Float32Array.from({length: size}, (_, n) => {
+      const t = n / (size - 1);
+      switch (type) {
+        case 'hann':            return 0.5 * (1 - Math.cos(2 * Math.PI * t));
+        case 'hamming':         return 0.54 - 0.46 * Math.cos(2 * Math.PI * t);
+        case 'blackman':        return 0.42 - 0.5 * Math.cos(2*Math.PI*t) + 0.08 * Math.cos(4*Math.PI*t);
+        case 'blackman-harris': return 0.35875 - 0.48829*Math.cos(2*Math.PI*t)
+                                               + 0.14128*Math.cos(4*Math.PI*t)
+                                               - 0.01168*Math.cos(6*Math.PI*t);
+        default: return 1; // rectangular
+      }
+    });
+  }
+
+  // ── Cooley-Tukey radix-2 FFT ───────────────────────────────────
+  function fft(re, im) {
+    const N = re.length;
+    for (let i = 1, j = 0; i < N; i++) {
+      let bit = N >> 1;
+      for (; j & bit; bit >>= 1) j ^= bit;
+      j ^= bit;
+      if (i < j) {
+        [re[i], re[j]] = [re[j], re[i]];
+        [im[i], im[j]] = [im[j], im[i]];
+      }
+    }
+    for (let len = 2; len <= N; len <<= 1) {
+      const ang = -2 * Math.PI / len;
+      const wRe = Math.cos(ang), wIm = Math.sin(ang);
+      for (let i = 0; i < N; i += len) {
+        let cRe = 1, cIm = 0;
+        for (let j = 0; j < len / 2; j++) {
+          const uRe = re[i+j], uIm = im[i+j];
+          const vRe = re[i+j+len/2]*cRe - im[i+j+len/2]*cIm;
+          const vIm = re[i+j+len/2]*cIm + im[i+j+len/2]*cRe;
+          re[i+j]         = uRe + vRe;  im[i+j]         = uIm + vIm;
+          re[i+j+len/2]   = uRe - vRe;  im[i+j+len/2]   = uIm - vIm;
+          [cRe, cIm] = [cRe*wRe - cIm*wIm, cRe*wIm + cIm*wRe];
+        }
+      }
+    }
+  }
+
+  // ── Frequency axis ─────────────────────────────────────────────
+  function buildFreqAxis() {
+    freqAxis.innerHTML = '';
+    const melMin = hzToMel(F_MIN), melMax = hzToMel(F_MAX);
+    [250, 500, 1000, 2000, 4000, 8000].forEach(f => {
+      if (f < F_MIN || f > F_MAX) return;
+      const pct = 1 - (hzToMel(f) - melMin) / (melMax - melMin);
+      const div = document.createElement('div');
+      div.className = 'freq-label';
+      div.style.top = `${pct * 100}%`;
+      div.textContent = f >= 1000 ? `${f/1000}k` : `${f}`;
+      freqAxis.appendChild(div);
+    });
+  }
+
+  // ── Legend ─────────────────────────────────────────────────────
+  function drawLegend() {
+    const cmap = cmapSel.value;
+    const grad = legendCtx.createLinearGradient(0, 0, 100, 0);
+    for (let i = 0; i <= 10; i++) {
+      const [r,g,b] = colormapColor(i/10, cmap);
+      grad.addColorStop(i/10, `rgb(${r},${g},${b})`);
+    }
+    legendCtx.fillStyle = grad;
+    legendCtx.fillRect(0, 0, 100, 9);
+    legendMin.textContent = `${dbFloor} dB`;
+    legendMax.textContent = `${dbCeil} dB`;
+  }
+
+  // ── Scroll canvas setup ────────────────────────────────────────
+  function setupScrollCanvas() {
+    const w = canvas.clientWidth  || 800;
+    const h = canvas.clientHeight || 300;
+    canvas.width = w; canvas.height = h;
+    scrollCanvas = document.createElement('canvas');
+    scrollCanvas.width = w; scrollCanvas.height = h;
+    scrollCtx = scrollCanvas.getContext('2d');
+    scrollCtx.fillStyle = '#000';
+    scrollCtx.fillRect(0, 0, w, h);
+  }
+
+  // ── dB / colormap controls ─────────────────────────────────────
+  dbFloorEl.addEventListener('input', () => {
+    dbFloor = +dbFloorEl.value;
+    dbFloorVal.textContent = `${dbFloor} dB`;
+    drawLegend();
+  });
+  dbCeilEl.addEventListener('input', () => {
+    dbCeil = +dbCeilEl.value;
+    dbCeilVal.textContent = `${dbCeil} dB`;
+    drawLegend();
+  });
+  cmapSel.addEventListener('change', drawLegend);
+
+  // ── YAMNet loader ──────────────────────────────────────────────
+  async function loadYAMNet() {
+    modelStatus.className   = 'loading';
+    modelStatus.textContent = 'Fetching class names…';
+    try {
+      const resp = await fetch(
+        'https://raw.githubusercontent.com/tensorflow/models/master/research/audioset/yamnet/yamnet_class_map.csv'
+      );
+      const text = await resp.text();
+      classNames = text.split('\n').slice(1)
+        .map(line => line.split(',')[2]?.replace(/"/g,'').trim())
+        .filter(Boolean);
+    } catch { /* will fall back to class indices */ }
+
+    modelStatus.textContent = 'Loading YAMNet…';
+    try {
+      yamnetModel = await tf.loadGraphModel(
+        'https://tfhub.dev/google/tfjs-model/yamnet/tfjs/1',
+        { fromTFHub: true }
+      );
+      modelStatus.textContent = '● Ready';
+      modelStatus.className   = 'ready';
+    } catch (e) {
+      modelStatus.textContent = `Model error: ${e.message.slice(0, 50)}`;
+      modelStatus.className   = 'error';
+    }
+  }
+
+  // ── Resample to 16 kHz ─────────────────────────────────────────
+  function resampleTo16k(samples, sourceSR) {
+    if (sourceSR === TARGET_SR) return samples;
+    const ratio  = sourceSR / TARGET_SR;
+    const outLen = Math.floor(samples.length / ratio);
+    const out    = new Float32Array(outLen);
+    for (let i = 0; i < outLen; i++) {
+      const pos  = i * ratio;
+      const idx  = Math.floor(pos);
+      const frac = pos - idx;
+      const next = Math.min(idx + 1, samples.length - 1);
+      out[i] = samples[idx] * (1 - frac) + samples[next] * frac;
+    }
+    return out;
+  }
+
+  // ── YAMNet inference ───────────────────────────────────────────
+  async function runYAMNet() {
+    if (!yamnetModel || inferRunning || !audioCtx) return;
+    if (performance.now() - lastInferTime < INFER_INTERVAL) return;
+
+    const neededRaw = Math.ceil(YAMNET_LEN * audioCtx.sampleRate / TARGET_SR);
+    if (rawSampleBuf.length < neededRaw) return;
+
+    inferRunning  = true;
+    lastInferTime = performance.now();
+
+    try {
+      const slice  = new Float32Array(rawSampleBuf.slice(-neededRaw));
+      const s16k   = resampleTo16k(slice, audioCtx.sampleRate);
+      const input  = tf.tensor1d(s16k.slice(0, YAMNET_LEN));
+      const output = yamnetModel.predict(input);
+      const scores = Array.isArray(output) ? output[0] : output;
+
+      const mean  = scores.mean(0);
+      const topK  = tf.topk(mean, 5);
+      const idxs  = await topK.indices.data();
+      const vals  = await topK.values.data();
+
+      // Dispose tensors
+      input.dispose();
+      (Array.isArray(output) ? output : [output]).forEach(t => t.dispose());
+      mean.dispose(); topK.indices.dispose(); topK.values.dispose();
+
+      renderPredictions(
+        Array.from(idxs).map((idx, i) => ({
+          label: classNames[idx] || `Class ${idx}`,
+          score: vals[i]
+        }))
+      );
+    } catch (e) {
+      console.warn('YAMNet inference:', e.message);
+    } finally {
+      inferRunning = false;
+    }
+  }
+
+  // ── Render classifier results ──────────────────────────────────
+  function renderPredictions(preds) {
+    predsEl.innerHTML = preds.map((p, i) => `
+      <div class="pred-row">
+        <span class="pred-rank">${i+1}</span>
+        <span class="pred-label" title="${p.label}">${p.label}</span>
+        <div class="pred-bar-bg">
+          <div class="pred-bar rank-${i}" style="width:${(p.score*100).toFixed(1)}%"></div>
+        </div>
+        <span class="pred-score">${(p.score*100).toFixed(0)}%</span>
+      </div>`).join('');
+  }
+
+  // ── Draw loop ──────────────────────────────────────────────────
+  function draw() {
+    animId = requestAnimationFrame(draw);
+    const speed = +speedSel.value;
+    const cmap  = cmapSel.value;
+
+    analyser.getFloatTimeDomainData(timeDomainData);
+
+    // Apply window then FFT
+    for (let i = 0; i < FFT_SIZE; i++) {
+      realBuf[i] = timeDomainData[i] * windowCoeffs[i];
+      imagBuf[i] = 0;
+    }
+    fft(realBuf, imagBuf);
+
+    // Mel filterbank → dB energies
+    const mel = new Float32Array(NUM_MEL_BINS);
+    for (let m = 0; m < NUM_MEL_BINS; m++) {
+      let energy = 0;
+      const filt = melFilterbank[m];
+      for (let k = 0; k < filt.length; k++) {
+        energy += filt[k] * (realBuf[k]*realBuf[k] + imagBuf[k]*imagBuf[k]);
+      }
+      mel[m] = energy > 0 ? 10 * Math.log10(energy) : -120;
+    }
+
+    // Scroll and paint new column
+    const W = scrollCanvas.width, H = scrollCanvas.height;
+    scrollCtx.drawImage(scrollCanvas, -speed, 0);
+    scrollCtx.fillStyle = '#000';
+    scrollCtx.fillRect(W - speed, 0, speed, H);
+
+    const col  = scrollCtx.createImageData(speed, H);
+    const data = col.data;
+    const binH = H / NUM_MEL_BINS;
+
+    for (let m = 0; m < NUM_MEL_BINS; m++) {
+      const t      = (mel[m] - dbFloor) / (dbCeil - dbFloor);
+      const [r,g,b] = colormapColor(t, cmap);
+      const yStart = Math.round((NUM_MEL_BINS - 1 - m) * binH);
+      const yEnd   = Math.round((NUM_MEL_BINS     - m) * binH);
+      for (let y = yStart; y < yEnd; y++) {
+        for (let x = 0; x < speed; x++) {
+          const idx = (y * speed + x) * 4;
+          data[idx]=r; data[idx+1]=g; data[idx+2]=b; data[idx+3]=255;
+        }
+      }
+    }
+    scrollCtx.putImageData(col, W - speed, 0);
+    ctx.drawImage(scrollCanvas, 0, 0);
+
+    runYAMNet(); // async, fire-and-forget
+  }
+
+  // ── Start mic ──────────────────────────────────────────────────
+  startBtn.addEventListener('click', async () => {
+    startBtn.disabled    = true;
+    statusEl.textContent = 'Requesting microphone…';
+    statusEl.className   = '';
+    rawSampleBuf         = [];
+
+    try {
+      audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      await audioCtx.resume();
+
+      stream = await navigator.mediaDevices.getUserMedia({
+        audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false }
+      });
+
+      analyser = audioCtx.createAnalyser();
+      analyser.fftSize = FFT_SIZE;
+      source = audioCtx.createMediaStreamSource(stream);
+      source.connect(analyser);
+
+      // ScriptProcessorNode collects all samples continuously for YAMNet
+      processor  = audioCtx.createScriptProcessor(4096, 1, 1);
+      silentGain = audioCtx.createGain();
+      silentGain.gain.value = 0;
+      processor.onaudioprocess = e => {
+        const ch = e.inputBuffer.getChannelData(0);
+        for (let i = 0; i < ch.length; i++) rawSampleBuf.push(ch[i]);
+        // Keep at most 4 seconds of audio
+        const max = (audioCtx.sampleRate || 44100) * 4;
+        if (rawSampleBuf.length > max) rawSampleBuf = rawSampleBuf.slice(-max);
+      };
+      source.connect(processor);
+      processor.connect(silentGain);
+      silentGain.connect(audioCtx.destination);
+
+      // Init buffers & filterbank
+      timeDomainData = new Float32Array(FFT_SIZE);
+      realBuf        = new Float32Array(FFT_SIZE);
+      imagBuf        = new Float32Array(FFT_SIZE);
+      melFilterbank  = buildMelFilterbank(FFT_SIZE, audioCtx.sampleRate, NUM_MEL_BINS, F_MIN, F_MAX);
+      windowCoeffs   = buildWindow(FFT_SIZE, windowSel.value);
+
+      windowSel.addEventListener('change', () => {
+        windowCoeffs = buildWindow(FFT_SIZE, windowSel.value);
+      });
+
+      setupScrollCanvas();
+      buildFreqAxis();
+      drawLegend();
+
+      statusEl.textContent = '● Live';
+      statusEl.className   = 'live';
+      stopBtn.disabled     = false;
+      draw();
+
+    } catch (e) {
+      statusEl.textContent = `Error: ${e.message}`;
+      statusEl.className   = 'error';
+      startBtn.disabled    = false;
+    }
+  });
+
+  // ── Stop mic ───────────────────────────────────────────────────
+  stopBtn.addEventListener('click', () => {
+    cancelAnimationFrame(animId);
+    stream?.getTracks().forEach(t => t.stop());
+    processor?.disconnect();
+    silentGain?.disconnect();
+    source?.disconnect();
+    analyser?.disconnect();
+    audioCtx?.close();
+    audioCtx     = null;
+    rawSampleBuf = [];
+    statusEl.textContent = 'Stopped';
+    statusEl.className   = '';
+    startBtn.disabled    = false;
+    stopBtn.disabled     = true;
+    predsEl.innerHTML    = '<div class="pred-row" style="color:#555;font-size:0.65rem;">Start mic to classify audio…</div>';
+  });
+
+  // ── Init ───────────────────────────────────────────────────────
+  drawLegend();
+  loadYAMNet(); // begin loading immediately — will be ready by the time user hits Start
+</script>
+</body>
+</html>
